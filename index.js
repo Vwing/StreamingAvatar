@@ -1,27 +1,53 @@
 'use strict';
 
 const heygen_API = {
-  apiKey: 'YourApiKey',
+  apiKey: 'insert-api-key',
   serverUrl: 'https://api.heygen.com',
 };
 
-const statusElement = document.querySelector('#status');
 const apiKey = heygen_API.apiKey;
 const SERVER_URL = heygen_API.serverUrl;
 
-if (apiKey === 'YourApiKey' || SERVER_URL === '') {
+if (apiKey === '' || SERVER_URL === '') {
   alert('Please enter your API key and server URL in the api.json file');
 }
 
 let sessionInfo = null;
 let peerConnection = null;
 
-function updateStatus(statusElement, message) {
-  statusElement.innerHTML += message + '<br>';
-  statusElement.scrollTop = statusElement.scrollHeight;
-}
+window.addEventListener('load', async () => {
+  await createAndStartSession();
+});
 
-updateStatus(statusElement, 'Please click the new button to create the stream first.');
+async function createAndStartSession() {
+  try {
+    const avatar = '';
+    const voice = '';
+   
+    // Create new session
+    sessionInfo = await newSession('low', avatar, voice);
+    const { sdp: serverSdp, ice_servers2: iceServers, session_id } = sessionInfo;
+    console.log('Session ID:', session_id);
+    
+    peerConnection = new RTCPeerConnection({ iceServers: iceServers });
+
+    peerConnection.ontrack = (event) => {
+      if (event.track.kind === 'audio' || event.track.kind === 'video') {
+        document.getElementById('mediaElement').srcObject = event.streams[0];
+      }
+    };
+
+    const remoteDescription = new RTCSessionDescription(serverSdp);
+    await peerConnection.setRemoteDescription(remoteDescription);
+
+    const localDescription = await peerConnection.createAnswer();
+    await peerConnection.setLocalDescription(localDescription);
+
+    await startSession(session_id, localDescription);
+  } catch (error) {
+    console.error('Error creating or starting session:', error);
+  }
+}
 
 function onMessage(event) {
   const message = event.data;
@@ -107,57 +133,6 @@ async function startAndDisplaySession() {
    updateStatus(statusElement, 'Session started successfully');
 }
 
-const taskInput = document.querySelector('#taskInput');
-
-// When clicking the "Send Task" button, get the content from the input field, then send the tas
-async function repeatHandler() {
-  if (!sessionInfo) {
-    updateStatus(statusElement, 'Please create a connection first');
-
-    return;
-  }
-  updateStatus(statusElement, 'Sending task... please wait');
-  const text = taskInput.value;
-  if (text.trim() === '') {
-    alert('Please enter a task');
-    return;
-  }
-
-  const resp = await repeat(sessionInfo.session_id, text);
-
-  updateStatus(statusElement, 'Task sent successfully');
-}
-
-async function talkHandler() {
-  if (!sessionInfo) {
-    updateStatus(statusElement, 'Please create a connection first');
-    return;
-  }
-  const prompt = taskInput.value; // Using the same input for simplicity
-  if (prompt.trim() === '') {
-    alert('Please enter a prompt for the LLM');
-    return;
-  }
-
-  updateStatus(statusElement, 'Talking to LLM... please wait');
-
-  try {
-    const text = await talkToOpenAI(prompt)
-
-    if (text) {
-      // Send the AI's response to Heygen's streaming.task API
-      const resp = await repeat(sessionInfo.session_id, text);
-      updateStatus(statusElement, 'LLM response sent successfully');
-    } else {
-      updateStatus(statusElement, 'Failed to get a response from AI');
-    }
-  } catch (error) {
-    console.error('Error talking to AI:', error);
-    updateStatus(statusElement, 'Error talking to AI');
-  }
-}
-
-
 // when clicking the "Close" button, close the connection
 async function closeConnectionHandler() {
   if (!sessionInfo) {
@@ -166,8 +141,6 @@ async function closeConnectionHandler() {
   }
 
   renderID++;
-  hideElement(canvasElement);
-  hideElement(bgCheckboxWrap);
   mediaCanPlay = false;
 
   updateStatus(statusElement, 'Closing connection... please wait');
@@ -183,13 +156,6 @@ async function closeConnectionHandler() {
   }
   updateStatus(statusElement, 'Connection closed successfully');
 }
-
-document.querySelector('#newBtn').addEventListener('click', createNewSession);
-document.querySelector('#startBtn').addEventListener('click', startAndDisplaySession);
-document.querySelector('#repeatBtn').addEventListener('click', repeatHandler);
-document.querySelector('#closeBtn').addEventListener('click', closeConnectionHandler);
-document.querySelector('#talkBtn').addEventListener('click', talkHandler);
-
 
 // new session
 async function newSession(quality, avatar_name, voice_id) {
@@ -268,27 +234,6 @@ async function handleICE(session_id, candidate) {
   }
 }
 
-async function talkToOpenAI(prompt) {
-  const response = await fetch(`http://localhost:3000/openai/complete`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ prompt }),
-  });
-  if (response.status === 500) {
-    console.error('Server error');
-    updateStatus(
-      statusElement,
-      'Server Error. Please make sure to set the openai api key',
-    );
-    throw new Error('Server error');
-  } else {
-    const data = await response.json();
-    return data.text;
-  }
-}
-
 // repeat the text
 async function repeat(session_id, text) {
   const response = await fetch(`${SERVER_URL}/v1/streaming.task`, {
@@ -332,35 +277,6 @@ async function stopSession(session_id) {
   }
 }
 
-const removeBGCheckbox = document.querySelector('#removeBGCheckbox');
-removeBGCheckbox.addEventListener('click', () => {
-  const isChecked = removeBGCheckbox.checked; // status after click
-
-  if (isChecked && !sessionInfo) {
-    updateStatus(statusElement, 'Please create a connection first');
-    removeBGCheckbox.checked = false;
-    return;
-  }
-
-  if (isChecked && !mediaCanPlay) {
-    updateStatus(statusElement, 'Please wait for the video to load');
-    removeBGCheckbox.checked = false;
-    return;
-  }
-
-  if (isChecked) {
-    hideElement(mediaElement);
-    showElement(canvasElement);
-
-    renderCanvas();
-  } else {
-    hideElement(canvasElement);
-    showElement(mediaElement);
-
-    renderID++;
-  }
-});
-
 let renderID = 0;
 function renderCanvas() {
   if (!removeBGCheckbox.checked) return;
@@ -379,7 +295,6 @@ function renderCanvas() {
   }
 
   function processFrame() {
-    if (!removeBGCheckbox.checked) return;
     if (curRenderID !== renderID) return;
 
     canvasElement.width = mediaElement.videoWidth;
@@ -397,7 +312,6 @@ function renderCanvas() {
 
       // You can implement your own logic here
       if (isCloseToGreen([red, green, blue])) {
-        // if (isCloseToGray([red, green, blue])) {
         data[i + 3] = 0;
       }
     }
@@ -429,15 +343,4 @@ let mediaCanPlay = false;
 mediaElement.onloadedmetadata = () => {
   mediaCanPlay = true;
   mediaElement.play();
-
-  showElement(bgCheckboxWrap);
 };
-const canvasElement = document.querySelector('#canvasElement');
-
-const bgCheckboxWrap = document.querySelector('#bgCheckboxWrap');
-const bgInput = document.querySelector('#bgInput');
-bgInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    renderCanvas();
-  }
-});
